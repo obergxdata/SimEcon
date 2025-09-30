@@ -102,6 +102,10 @@ class Bank:
         self, tid: str, bank_interface: "BankInterface"
     ) -> Union[Deposit, Withdraw]:
 
+        # check that tid is string
+        if not isinstance(tid, str) or tid == "":
+            raise ValueError(f"Transaction id {tid} is not a string or is empty")
+
         for deposit in self.deposits[bank_interface]:
             if deposit.tid == tid:
                 return deposit
@@ -119,8 +123,6 @@ class Bank:
         total = sum(deposit.amount for deposit in deposits) - sum(
             withdraw.amount for withdraw in withdraws
         )
-        raise Exception(total)
-
         return total
 
 

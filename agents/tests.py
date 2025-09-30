@@ -101,6 +101,7 @@ def test_produce_goods() -> None:
     corporation = Corporation()
     corporation.latest_price = 10
     corporation.bank_interface = BankInterface(Bank(CentralBank()), corporation)
+    corporation.bank_interface.deposit(1010)
     corporation.latest_demand = 100
     corporation.ppe = 3
     corporation.salary = 100
@@ -115,6 +116,7 @@ def test_produce_goods() -> None:
     corporation.initialize_tick_stats()
     corporation.produce_goods()
     corporation.pay_salaries()
+    assert corporation.bank_interface.check_balance() == 10
 
     for person in corporation.employees:
         person.spend([corporation], person.latest_salary_id)
@@ -149,7 +151,9 @@ def test_review_hiring() -> None:
 
 def test_pay_salary() -> None:
     corporation = Corporation()
+    corporation.salary = 100
     corporation.bank_interface = BankInterface(Bank(CentralBank()), corporation)
+    corporation.bank_interface.deposit(100)
     person = Person()
     person.bank_interface = BankInterface(Bank(CentralBank()), person)
     corporation.add_employee(person)
@@ -159,3 +163,33 @@ def test_pay_salary() -> None:
     assert (
         corporation.bank_interface.find_transaction(wtid).amount == corporation.salary
     )
+
+
+def test_bottom_line() -> None:
+    corporation = Corporation()
+    corporation.salary = 100
+    corporation.bank_interface = BankInterface(Bank(CentralBank()), corporation)
+    corporation.bank_interface.deposit(500)
+    for _ in range(10):
+        person = Person()
+        person.bank_interface = BankInterface(Bank(CentralBank()), person)
+        corporation.add_employee(person)
+
+    assert corporation.bottom_line(buffer=1.0) == -500
+    assert corporation.bottom_line(buffer=1.2) == -700
+    assert corporation.bottom_line(buffer=1.5) == -1000
+
+
+def test_cost_savings() -> None:
+    corporation = Corporation()
+    corporation.salary = 100
+    corporation.bank_interface = BankInterface(Bank(CentralBank()), corporation)
+    corporation.bank_interface.deposit(500)
+    for _ in range(10):
+        person = Person()
+        person.bank_interface = BankInterface(Bank(CentralBank()), person)
+        corporation.add_employee(person)
+
+    saved = corporation.cost_savings(cost=1000, balance=500)
+    assert saved == 500
+    assert len(corporation.employees) == 5

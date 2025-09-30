@@ -28,3 +28,9 @@ class BankInterface:
 
     def find_transaction(self, tid: str) -> Union[Deposit, Withdraw]:
         return self.bank.find_transaction(tid, self)
+
+    def take_loan(self, amount: float, maximum: bool = False) -> str:
+        # TODO: implement loan taking
+        # If maximum is True, and intial amount is denied
+        # get the maximum amount from the bank
+        return False

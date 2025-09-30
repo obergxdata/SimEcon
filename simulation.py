@@ -42,8 +42,13 @@ class Simulation:
         for corp in self.corporations:
             corp.set_tick(self.tick)
             corp.initialize_tick_stats()
+            corp.review_finance()
             corp.produce_goods()
             corp.pay_salaries()
+            # If corp is dead, remove it and pay employees
+            if not corp.alive:
+                logger.info(f"Corporation {corp.name} is dead, step {self.tick}")
+                self.corporations.remove(corp)
             if self.tick > 1:
                 corp.review_price()
                 corp.review_salary()
@@ -53,16 +58,15 @@ class Simulation:
         if not self.corporations or not self.people:
             raise Exception("corporations and people must be initialized")
 
-        spent = 0
-        rich = 0
-        poor = 0
+        broke = 0
         for person in self.people:
             person.set_tick(self.tick)
             if person.bank_interface.check_balance() > 0:
-                spent += person.spend(self.corporations)
-                rich += 1
+                spent = person.spend(self.corporations)
+                if spent > 0:
+                    self.stats.record(self.tick, person_money_spent=spent)
             else:
-                poor += 1
+                broke += 1
 
     def one_tick(self):
         self.tick += 1

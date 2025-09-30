@@ -2,7 +2,7 @@ from typing import TYPE_CHECKING, Set, Union
 from banking.bank_interface import BankInterface
 from dataclasses import dataclass, field
 from base_agent import BaseAgent, BaseStats
-
+import math
 
 if TYPE_CHECKING:
     from .person import Person
@@ -40,6 +40,7 @@ class Corporation(BaseAgent):
         self.latest_price: float = 0
         self.hiring: bool = True
         self.ppe: int = 0
+        self.alive = True
 
     def review_salary(self) -> None:
         # Increase salary by the average sales increase/decrease
@@ -66,31 +67,54 @@ class Corporation(BaseAgent):
         self.employees.add(employee)
         self.reivew_hiring()
 
-    def remove_employee(self, employee: "Person") -> None:
-        self.employees.remove(employee)
-
     def pay_salary(self, employee: "Person") -> None:
         wtid, dtid = self.bank_interface.transfer(
             self.salary, to=employee.bank_interface
         )
+
         employee.latest_salary_id = dtid
         return wtid, dtid
+
+    def review_finance(self):
+        bottom_line = self.bottom_line()
+        if bottom_line < 0:
+            self.cost_savings(
+                cost=abs(bottom_line), balance=self.bank_interface.check_balance()
+            )
+
+    def bottom_line(self, buffer: float = 1.2):
+        balance = self.bank_interface.check_balance()
+        total_salaries = self.salary * len(self.employees)
+        required_balance = total_salaries * buffer
+        bottom_line = balance - required_balance
+
+        return bottom_line
 
     def pay_salaries(self) -> None:
         total_salaries = 0
         pay_count = 0
-        for employee in self.employees:
-            if employee.bank_interface.check_balance() > 0:
-                self.pay_salary(employee)
-                total_salaries += self.salary
-                pay_count += 1
-            else:
-                # If credit denied from bank, use goverment salary guarantee!
-                pass  # TODO: Take loan? Also salary guarantee!
 
-        self._log(
-            f"Paid {total_salaries} to {pay_count} employees, left {self.bank_interface.check_balance()}"
-        )
+        for employee in self.employees:
+            if self.bank_interface.check_balance() < self.salary:
+                raise Exception("Not enough balance to pay salaries")
+            self.pay_salary(employee)
+            total_salaries += self.salary
+            pay_count += 1
+
+        return total_salaries
+
+    def cost_savings(self, cost: int, balance: int):
+        num_to_fire = math.ceil((cost - balance) / self.salary)
+        saved = 0
+        for _ in range(num_to_fire):
+            employee = self.employees.pop()
+            employee.employed = False
+            self._log(f"Fired employee {employee.name}")
+            tid = employee.bank_interface.deposit(employee.salary)
+            employee.latest_salary_id = tid
+            saved += self.salary
+
+        return saved
 
     def check_inventory(self) -> bool:
         return len(self.goods) > 0
