@@ -13,10 +13,12 @@ def test_ticks():
     sim.sim_settings.number_of_banks = 2
     sim.sim_settings.number_of_people = 500
     sim.sim_settings.number_of_corporations = 3
+    sim.sim_settings.min_wage = 75
     sim.corporation_seed.price = 10
     sim.corporation_seed.demand = 250
     sim.corporation_seed.ppe = 3.0
     sim.corporation_seed.salary = 100
+    sim.corporation_seed.balance = 100000000
     sim.person_seed.mpc = 0.2
 
     sim.init_banks()

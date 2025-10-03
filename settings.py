@@ -9,6 +9,7 @@ class CorporationSeed:
     ppe: int = 0
     salery_review: int = 0
     salary: float = 0
+    balance: float = 0
 
 
 @dataclass
@@ -22,3 +23,4 @@ class SimulationSettings:
     number_of_corporations: int = 0
     number_of_people: int = 0
     number_of_banks: int = 0
+    min_wage: float = 0

@@ -3,7 +3,8 @@ from typing import TYPE_CHECKING, Union, Tuple
 import uuid
 
 if TYPE_CHECKING:
-    from .bank_interface import BankInterface
+    from banking.bank_interface import BankInterface
+    from agents.corporation import Corporation
 
 
 class Bank:
@@ -43,7 +44,7 @@ class Bank:
         """
 
         if amount < 0:
-            raise ValueError("Amount must be positive")
+            raise ValueError(f"Amount must be positive, got {amount}")
 
         if from_ not in self.Ledger:
             raise ValueError(f"BankInterface {from_} not found in bank {self}")
@@ -97,6 +98,28 @@ class Bank:
 
     def get_reserve(self, bank: "Bank") -> float:
         return self.central_bank.get_reserve(bank)
+
+    def lend_funds_corp(
+        self, amount: float, bank_interface: "BankInterface", corp: "Corporation"
+    ) -> bool:
+        balance = self.get_ledger(bank_interface)
+        if balance <= 0:
+            return False  # too risky
+
+        # Economic net cashflow, not raw bank transactions
+        total_revenue = sum(corp.stats.revenue.values())
+        total_costs = sum(corp.stats.costs.values())
+        net_cashflow = total_revenue - total_costs
+
+        deposits = sum(deposit.amount for deposit in self.deposits[bank_interface])
+
+        if net_cashflow >= 0:
+            return amount <= 0.5 * deposits
+
+        if net_cashflow < 0 and corp.revenue_trend(months=6) > 0:
+            return amount <= 0.25 * deposits
+
+        return False
 
     def find_transaction(
         self, tid: str, bank_interface: "BankInterface"

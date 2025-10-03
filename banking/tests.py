@@ -1,3 +1,5 @@
+import pytest
+
 from banking.agents.central_bank import CentralBank
 from banking.agents.bank import Bank
 from banking.bank_interface import BankInterface
@@ -68,6 +70,8 @@ def test_bank_interface_pay_salary() -> None:
     persons = [Person(bank=bank) for _ in range(100)]
     # Create 1 corporation
     corporation = Corporation(bank=bank)
+    corporation.bank_interface = BankInterface(bank, corporation)
+    corporation.bank_interface.deposit(99999)
     corporation.salary = 50
     # Add employees to corporation
     for person in persons:
@@ -80,3 +84,11 @@ def test_bank_interface_pay_salary() -> None:
     # Validate balances
     for person in persons:
         assert person.bank_interface.check_balance() == 50
+
+
+def test_lend_funds_corp():
+    # TODO
+    central_bank = CentralBank()
+    bank = Bank(central_bank)
+    corp = Corporation(bank=bank)
+    corp.bank_interface = BankInterface(bank, corp)

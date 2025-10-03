@@ -22,6 +22,7 @@ class SimStats(BaseStats):
     goods_stock_left: dict[int, int] = field(default_factory=dict)
     person_money_spent: dict[int, int] = field(default_factory=dict)
     person_money_in_banks: dict[int, int] = field(default_factory=dict)
+    avg_salary: dict[int, float] = field(default_factory=dict)
     goods_avg_price: dict[int, float] = field(default_factory=dict)
 
 
@@ -51,7 +52,7 @@ class Simulation:
                 self.corporations.remove(corp)
             if self.tick > 1:
                 corp.review_price()
-                corp.review_salary()
+                corp.review_salary(self.sim_settings.min_wage)
 
     def people_tick(self):
         # We always need to reset demand and sales
@@ -102,6 +103,7 @@ class Simulation:
         person_money_in_banks = sum(
             [p.bank_interface.check_balance() for p in self.people]
         )
+        avg_salary = sum([c.salary for c in self.corporations]) / len(self.corporations)
         self.stats.record(
             self.tick,
             persons_employed=persons_employed,
@@ -113,6 +115,7 @@ class Simulation:
             goods_avg_price=goods_avg_price,
             person_money_spent=person_money_spent,
             person_money_in_banks=person_money_in_banks,
+            avg_salary=avg_salary,
         )
 
         return self.stats
@@ -157,6 +160,7 @@ class Simulation:
             corp.latest_demand = self.corporation_seed.demand
             corp.latest_price = self.corporation_seed.price
             corp.salary = self.corporation_seed.salary
+            corp.bank_interface.deposit(self.corporation_seed.balance)
 
         # Start labor market
         employee_count = self.labor_market()

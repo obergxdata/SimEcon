@@ -3,6 +3,7 @@ from banking.bank_interface import BankInterface
 from dataclasses import dataclass, field
 from base_agent import BaseAgent, BaseStats
 import math
+import numpy as np
 
 if TYPE_CHECKING:
     from .person import Person
@@ -13,6 +14,8 @@ if TYPE_CHECKING:
 @dataclass
 class CorpStats(BaseStats):
     sales: dict[int, float] = field(default_factory=dict)
+    revenue: dict[int, float] = field(default_factory=dict)
+    costs: dict[int, float] = field(default_factory=dict)
     demand: dict[int, float] = field(default_factory=dict)
     production: dict[int, float] = field(default_factory=dict)
     price: dict[int, float] = field(default_factory=dict)
@@ -38,11 +41,13 @@ class Corporation(BaseAgent):
         self.latest_sales: int = 0
         self.latest_demand: int = 0
         self.latest_price: float = 0
+        self.latest_revenue: float = 0
+        self.latest_costs: float = 0
         self.hiring: bool = True
         self.ppe: int = 0
         self.alive = True
 
-    def review_salary(self) -> None:
+    def review_salary(self, min_wage: float = 0) -> None:
         # Increase salary by the average sales increase/decrease
         # for the last 6 sales values
         last_6_sales = list(self.stats.sales.values())[-6:]
@@ -58,7 +63,16 @@ class Corporation(BaseAgent):
 
         # Average change across the periods
         average_change = sum(changes) / len(changes)
-        self.salary += average_change
+
+        # Ensure salary is at least the minimum wage
+        if self.salary + average_change < min_wage:
+            self._log(
+                f"Salary is below minimum wage, setting to {min_wage}", level="warning"
+            )
+            self.salary = min_wage
+        else:
+            self.salary += average_change
+
         self.stats.record(self.tick, salary=self.salary)
 
     def add_employee(self, employee: "Person") -> None:
@@ -67,49 +81,77 @@ class Corporation(BaseAgent):
         self.employees.add(employee)
         self.reivew_hiring()
 
+    def pay_salaries(self) -> None:
+        for employee in self.employees:
+            self.pay_salary(employee)
+
     def pay_salary(self, employee: "Person") -> None:
         wtid, dtid = self.bank_interface.transfer(
             self.salary, to=employee.bank_interface
         )
+        self.latest_costs += self.salary
+        self.stats.record(self.tick, costs=self.latest_costs)
 
         employee.latest_salary_id = dtid
         return wtid, dtid
 
+    def revenue_trend(self, months: int = 6) -> float:
+        revenue = list(self.stats.revenue.values())[-months:]
+        if len(revenue) < months:
+            return 0.0  # not enough data
+
+        recent = revenue[-months:]
+        first_half = np.mean(recent[: months // 2])
+        second_half = np.mean(recent[months // 2 :])
+
+        if first_half == 0:
+            return 0.0
+
+        return (second_half - first_half) / first_half
+
+    def apply_finance_decision(self, decision: str):
+        pass
+
     def review_finance(self):
-        bottom_line = self.bottom_line()
-        if bottom_line < 0:
-            self.cost_savings(
-                cost=abs(bottom_line), balance=self.bank_interface.check_balance()
-            )
+        runway, burn, net_margin = self.forecast()
+        trend = self.revenue_trend(months=6)
+        if net_margin > 0:
+            return "healthy"
+        elif burn > 0 and runway < 3:
+            if trend > 0:
+                return "borrow_funds"
+            else:
+                return "cost_savings"
+        elif burn > 0 and runway < 6:
+            return "monitor"
+        else:
+            return "monitor"
 
-    def bottom_line(self, buffer: float = 1.2):
+    def forecast(self):
         balance = self.bank_interface.check_balance()
-        total_salaries = self.salary * len(self.employees)
-        required_balance = total_salaries * buffer
-        bottom_line = balance - required_balance
+        costs = list(self.stats.costs.values())[-3:]
+        revenue = list(self.stats.revenue.values())[-3:]
 
-        return bottom_line
+        # totals
+        total_costs = sum(costs)
+        total_revenue = sum(revenue)
 
-    def pay_salaries(self) -> None:
-        total_salaries = 0
-        pay_count = 0
+        net_margin = total_revenue - total_costs
+        burn = max(0, total_costs - total_revenue)
 
-        for employee in self.employees:
-            if self.bank_interface.check_balance() < self.salary:
-                raise Exception("Not enough balance to pay salaries")
-            self.pay_salary(employee)
-            total_salaries += self.salary
-            pay_count += 1
+        if burn > 0:
+            runway = balance / burn
+        else:
+            runway = float("inf")
 
-        return total_salaries
+        return runway, burn, net_margin
 
-    def cost_savings(self, cost: int, balance: int):
-        num_to_fire = math.ceil((cost - balance) / self.salary)
+    def cost_savings(self, save):
+        num_to_fire = math.ceil(save / self.salary)
         saved = 0
         for _ in range(num_to_fire):
             employee = self.employees.pop()
             employee.employed = False
-            self._log(f"Fired employee {employee.name}")
             tid = employee.bank_interface.deposit(employee.salary)
             employee.latest_salary_id = tid
             saved += self.salary
@@ -129,25 +171,28 @@ class Corporation(BaseAgent):
             bank_interface.transfer(self.latest_price, to=self.bank_interface)
             good = self.goods.pop(0)
             self.latest_sales += 1
+            self.latest_revenue += self.latest_price
             self.stats.record(self.tick, sales=self.latest_sales)
+            self.stats.record(self.tick, revenue=self.latest_revenue)
             return good
         else:
             return False
 
-    def review_price(self) -> None:
+    def adjust_price(self):
+        sales = sum(self.stats.sales.values())
+        demand = sum(self.stats.demand.values())
 
-        if self.tick < 1:
-            raise Exception("Tick is less than 1")
+        if demand == 0:
+            # Nobody wanted to buy → price too high
+            self.latest_price *= 0.9  # lower 10%
+        elif sales < demand:
+            # More demand than sales → stock-out
+            self.latest_price *= 1.05  # raise 5%
+        else:
+            # sales == demand → balanced
+            pass
 
-        latest_sales = self.stats.sales[self.tick - 1]
-        latest_demand = self.stats.demand[self.tick - 1]
-
-        if latest_sales == 0 or latest_demand == 0:
-            return
-        # Increase or decrease price by the difference between demand and sales
-        price_change = (latest_demand - latest_sales) / latest_sales
-        self.latest_price += price_change * self.latest_price
-        self.stats.record(self.tick, price=self.latest_price)
+        return self.latest_price
 
     def reivew_hiring(self) -> None:
         employees = len(self.employees)
