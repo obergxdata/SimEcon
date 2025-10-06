@@ -1,4 +1,4 @@
-from banking.bank_accounting import Deposit, Withdraw
+from banking.bank_accounting import Deposit, Withdraw, Loan
 from typing import TYPE_CHECKING, Union, Tuple
 import uuid
 
@@ -12,9 +12,11 @@ class Bank:
     def __init__(self, central_bank: "CentralBank") -> None:
         self.deposits: dict["BankInterface", list[Deposit]] = {}
         self.withdraws: dict["BankInterface", list[Withdraw]] = {}
+        self.loans: dict["BankInterface", list[Loan]] = {}
         self.Ledger: dict["BankInterface", float] = {}
         self.central_bank = central_bank
         self.central_bank.register_bank(self)
+        self.interest_rate = 0.01
         self.tick = 0
 
     @staticmethod
@@ -30,6 +32,7 @@ class Bank:
     def register_BankInterface(self, bank_interface: "BankInterface") -> None:
         self.deposits[bank_interface] = []
         self.withdraws[bank_interface] = []
+        self.loans[bank_interface] = []
         self.Ledger[bank_interface] = 0
 
     def transfer(
@@ -99,27 +102,62 @@ class Bank:
     def get_reserve(self, bank: "Bank") -> float:
         return self.central_bank.get_reserve(bank)
 
-    def lend_funds_corp(
-        self, amount: float, bank_interface: "BankInterface", corp: "Corporation"
-    ) -> bool:
+    def issue_loan(
+        self, amount: float, corp: "Corporation", bank_interface: "BankInterface"
+    ) -> str:
+        # Check credit
+        credit_amount = self.corp_credit_check(amount, corp, bank_interface)
+        if credit_amount == 0:
+            return 0
+        # issue loan
+        tid = self.generate_uid()
+        loan = Loan(
+            tid=tid,
+            amount=credit_amount,
+            issued_by=self,
+            issued_to=bank_interface,
+            interest_rate=self.interest_rate,
+        )
+        # Update ledger
+        self._update_ledger(bank_interface, credit_amount)
+
+        # Add loan to loans ledger
+        self.loans[bank_interface].append(loan)
+        return loan
+
+    def corp_credit_check(
+        self, amount: float, corp: "Corporation", bank_interface: "BankInterface"
+    ) -> float:
+        # Financial indicators
         balance = self.get_ledger(bank_interface)
-        if balance <= 0:
-            return False  # too risky
+        runway, burn, net_margin = corp.forecast()
+        trend = corp.revenue_trend()
 
-        # Economic net cashflow, not raw bank transactions
-        total_revenue = sum(corp.stats.revenue.values())
-        total_costs = sum(corp.stats.costs.values())
-        net_cashflow = total_revenue - total_costs
+        # --- Risk assessment ---
+        # If company is losing money and has <3 months runway → too risky
+        if runway < 3 and net_margin < 0:
+            return 0  # deny loan
 
-        deposits = sum(deposit.amount for deposit in self.deposits[bank_interface])
+        # If negative trend and losing money → high risk
+        if trend < 0 and net_margin < 0:
+            return 0
 
-        if net_cashflow >= 0:
-            return amount <= 0.5 * deposits
+        # --- Lending capacity ---
+        base_amount = 0.5 * balance  # safe default = 50% of balance
 
-        if net_cashflow < 0 and corp.revenue_trend(months=6) > 0:
-            return amount <= 0.25 * deposits
+        # Reward strong trend or profitability
+        if trend > 0.2:
+            base_amount *= 1.5  # growing business → more confidence
+        elif trend < -0.2:
+            base_amount *= 0.5  # declining → more conservative
 
-        return False
+        if net_margin > 0:
+            base_amount += 0.2 * net_margin  # bonus for profit
+
+        # Ensure it doesn’t exceed total deposits or cash safety ratio
+        max_amount = min(base_amount, 0.75 * balance)
+
+        return min(max_amount, amount)
 
     def find_transaction(
         self, tid: str, bank_interface: "BankInterface"

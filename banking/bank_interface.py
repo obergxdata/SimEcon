@@ -32,8 +32,8 @@ class BankInterface:
     def find_transaction(self, tid: str) -> Union[Deposit, Withdraw]:
         return self.bank.find_transaction(tid, self)
 
-    def borrow_funds(self, amount: float, corp: "Corporation") -> str:
-        # TODO: implement loan taking
-        # If maximum is True, and intial amount is denied
-        # get the maximum amount from the bank
-        return False
+    def corp_credit_check(self, amount: float) -> str:
+        return self.bank.corp_credit_check(amount, self.entity, self)
+
+    def borrow_funds(self, amount: float) -> str:
+        return self.bank.issue_loan(amount, self.entity, self)

@@ -21,7 +21,7 @@ class Person(BaseAgent):
         # return one corporation at random
         # with inverse price as weight
         corp = random.choices(
-            corps, weights=[1 / corp.latest_price for corp in corps], k=1
+            corps, weights=[1 / corp.current_price for corp in corps], k=1
         )[0]
         return corp
 
@@ -31,11 +31,11 @@ class Person(BaseAgent):
         queue = []
         while budget > 0:
             # Check if any corporation has affordable goods
-            if not any(corp.latest_price <= budget for corp in corps):
+            if not any(corp.current_price <= budget for corp in corps):
                 break
             corp = self.choose_corporations(corps)
-            if corp.latest_price <= budget:
-                budget -= corp.latest_price
+            if corp.current_price <= budget:
+                budget -= corp.current_price
                 corp.register_demand(1)
                 queue.append(corp)
 

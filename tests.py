@@ -13,13 +13,13 @@ def test_ticks():
     sim.sim_settings.number_of_banks = 2
     sim.sim_settings.number_of_people = 500
     sim.sim_settings.number_of_corporations = 3
-    sim.sim_settings.min_wage = 75
+    sim.sim_settings.min_wage = 0
     sim.corporation_seed.price = 10
-    sim.corporation_seed.demand = 250
+    sim.corporation_seed.demand = 100
     sim.corporation_seed.ppe = 3.0
     sim.corporation_seed.salary = 100
-    sim.corporation_seed.balance = 100000000
-    sim.person_seed.mpc = 0.2
+    sim.corporation_seed.balance = 50000
+    sim.person_seed.mpc = 0.5
 
     sim.init_banks()
     sim.init_people()
@@ -72,10 +72,29 @@ def test_ticks():
     expected = (s1_produced_goods - s1_stock_left) * sim.corporation_seed.price
     assert stats_1["person_money_spent"] == pytest.approx(expected, rel=0.05)
 
-    sim.one_tick()
-    stats_2 = sim.stats.get_latest()
-    sim.one_tick()
-    stats_3 = sim.stats.get_latest()
-    sim.one_tick()
-    stats_4 = sim.stats.get_latest()
-    raise Exception(sim.stats)
+    for _ in range(20):
+        sim.one_tick()
+
+    sim.stats.plot(
+        columns=["goods_demanded", "goods_produced", "goods_sold", "goods_stock_left"],
+        folder="goods",
+        filename="goods_stats",
+    )
+
+    sim.stats.plot(
+        columns=[
+            "company_avg_revenue",
+            "company_avg_costs",
+            "company_avg_profit",
+        ],
+        folder="corporation",
+        filename="company_finance",
+    )
+
+    # Market plots
+    sim.stats.plot(
+        columns=["persons_employed", "person_avg_salary", "person_avg_money_in_banks"],
+        folder="market",
+        filename="market_stats",
+        log_scale=True,
+    )

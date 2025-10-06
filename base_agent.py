@@ -4,8 +4,10 @@ Base class for all agents in the SimEcon simulation.
 Provides common functionality like logging that can be shared across different agent types.
 """
 
+import os
 from logging_config import get_logger
 from dataclasses import asdict
+import matplotlib.pyplot as plt
 
 logger = get_logger(__name__)
 
@@ -51,5 +53,30 @@ class BaseStats:
             latest_stats[stat_name] = stat_dict[max_tick]
         return latest_stats
 
-    def generate_chart(self, columns: list[str], filename: str):
-        pass
+    def plot(
+        self, columns: list[str], folder: str, filename: str, log_scale: bool = False
+    ):
+        """Plot one or more stats columns and save to file."""
+
+        os.makedirs(f"charts/{folder}", exist_ok=True)
+        plt.figure(figsize=(10, 5))
+
+        for col in columns:
+            data = getattr(self, col, None)
+            if data is None or not isinstance(data, dict):
+                raise Exception(f"'{col}' not found or not a dict")
+
+            ticks, values = zip(*sorted(data.items()))
+            plt.plot(ticks, values, label=col)
+
+        plt.xlabel("Tick")
+        plt.ylabel("Value")
+        plt.title(", ".join(columns))
+        plt.legend()
+        if log_scale:
+            plt.yscale("log")
+        plt.tight_layout()
+
+        filepath = os.path.join(f"charts/{folder}", f"{filename}.png")
+        plt.savefig(filepath)
+        plt.close()

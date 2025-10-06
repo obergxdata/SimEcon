@@ -7,7 +7,8 @@ from banking.agents.central_bank import CentralBank
 import random
 from logging_config import get_logger
 from settings import CorporationSeed, PersonSeed, SimulationSettings
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
+import math
 
 logger = get_logger(__name__)
 
@@ -21,9 +22,14 @@ class SimStats(BaseStats):
     goods_owned: dict[int, int] = field(default_factory=dict)
     goods_stock_left: dict[int, int] = field(default_factory=dict)
     person_money_spent: dict[int, int] = field(default_factory=dict)
-    person_money_in_banks: dict[int, int] = field(default_factory=dict)
-    avg_salary: dict[int, float] = field(default_factory=dict)
+    person_avg_money_in_banks: dict[int, int] = field(default_factory=dict)
+    company_money_in_banks: dict[int, int] = field(default_factory=dict)
+    person_avg_salary: dict[int, float] = field(default_factory=dict)
     goods_avg_price: dict[int, float] = field(default_factory=dict)
+    company_revenue: dict[int, float] = field(default_factory=dict)
+    company_avg_revenue: dict[int, float] = field(default_factory=dict)
+    company_avg_costs: dict[int, float] = field(default_factory=dict)
+    company_avg_profit: dict[int, float] = field(default_factory=dict)
 
 
 class Simulation:
@@ -41,18 +47,7 @@ class Simulation:
     def corporations_tick(self):
         # Check for salary review
         for corp in self.corporations:
-            corp.set_tick(self.tick)
-            corp.initialize_tick_stats()
-            corp.review_finance()
-            corp.produce_goods()
-            corp.pay_salaries()
-            # If corp is dead, remove it and pay employees
-            if not corp.alive:
-                logger.info(f"Corporation {corp.name} is dead, step {self.tick}")
-                self.corporations.remove(corp)
-            if self.tick > 1:
-                corp.review_price()
-                corp.review_salary(self.sim_settings.min_wage)
+            corp.one_tick(self.tick, self.sim_settings.min_wage)
 
     def people_tick(self):
         # We always need to reset demand and sales
@@ -89,6 +84,7 @@ class Simulation:
             pass
 
     def gen_stats(self):
+
         # Population stats
         persons_employed = len([1 for p in self.people if p.employed])
         goods_owned = sum([len(p.bought_goods) for p in self.people])
@@ -100,10 +96,26 @@ class Simulation:
             [c.stats.price[self.tick] for c in self.corporations]
         ) / len(self.corporations)
         person_money_spent = sum([g.price for p in self.people for g in p.bought_goods])
-        person_money_in_banks = sum(
+        person_avg_money_in_banks = sum(
             [p.bank_interface.check_balance() for p in self.people]
+        ) / len(self.people)
+        company_money_in_banks = sum(
+            [c.bank_interface.check_balance() for c in self.corporations]
         )
-        avg_salary = sum([c.salary for c in self.corporations]) / len(self.corporations)
+        company_revenue = sum([c.stats.revenue[self.tick] for c in self.corporations])
+        company_avg_revenue = sum(
+            [c.stats.revenue[self.tick] for c in self.corporations]
+        ) / len(self.corporations)
+        company_avg_costs = sum(
+            [c.stats.costs[self.tick] for c in self.corporations]
+        ) / len(self.corporations)
+        company_avg_profit = sum(
+            [c.stats.profit[self.tick] for c in self.corporations]
+        ) / len(self.corporations)
+        person_avg_salary = sum([c.salary for c in self.corporations]) / len(
+            self.corporations
+        )
+
         self.stats.record(
             self.tick,
             persons_employed=persons_employed,
@@ -112,10 +124,15 @@ class Simulation:
             goods_produced=goods_produced,
             goods_sold=goods_sold,
             goods_stock_left=goods_stock_left,
-            goods_avg_price=goods_avg_price,
-            person_money_spent=person_money_spent,
-            person_money_in_banks=person_money_in_banks,
-            avg_salary=avg_salary,
+            goods_avg_price=round(goods_avg_price, 2),
+            person_money_spent=round(person_money_spent, 2),
+            person_avg_money_in_banks=round(person_avg_money_in_banks, 2),
+            company_money_in_banks=round(company_money_in_banks, 2),
+            company_revenue=round(company_revenue, 2),
+            company_avg_revenue=round(company_avg_revenue, 2),
+            company_avg_profit=round(company_avg_profit, 2),
+            company_avg_costs=round(company_avg_costs, 2),
+            person_avg_salary=round(person_avg_salary, 2),
         )
 
         return self.stats
@@ -158,7 +175,7 @@ class Simulation:
             corp.ppe = self.corporation_seed.ppe
             corp.salary = self.corporation_seed.salary
             corp.latest_demand = self.corporation_seed.demand
-            corp.latest_price = self.corporation_seed.price
+            corp.current_price = self.corporation_seed.price
             corp.salary = self.corporation_seed.salary
             corp.bank_interface.deposit(self.corporation_seed.balance)
 

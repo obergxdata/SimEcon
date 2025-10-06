@@ -9,12 +9,14 @@ if TYPE_CHECKING:
     from .person import Person
     from banking.agents.bank import Bank
     from banking.bank_interface import BankInterface
+    from banking.bank_accounting import Loan
 
 
 @dataclass
 class CorpStats(BaseStats):
     sales: dict[int, float] = field(default_factory=dict)
     revenue: dict[int, float] = field(default_factory=dict)
+    profit: dict[int, float] = field(default_factory=dict)
     costs: dict[int, float] = field(default_factory=dict)
     demand: dict[int, float] = field(default_factory=dict)
     production: dict[int, float] = field(default_factory=dict)
@@ -40,17 +42,21 @@ class Corporation(BaseAgent):
         self.salary: float = 0
         self.latest_sales: int = 0
         self.latest_demand: int = 0
-        self.latest_price: float = 0
+        self.current_price: float = 0
         self.latest_revenue: float = 0
         self.latest_costs: float = 0
         self.hiring: bool = True
         self.ppe: int = 0
         self.alive = True
+        self.loans: list[Loan] = []
 
     def review_salary(self, min_wage: float = 0) -> None:
         # Increase salary by the average sales increase/decrease
         # for the last 6 sales values
-        last_6_sales = list(self.stats.sales.values())[-6:]
+
+        # Take all sales except last one
+        sales = list(self.stats.sales.values())[:-1]
+        last_6_sales = sales[-6:]
 
         if len(last_6_sales) < 2:
             return  # Need at least 2 data points to calculate change
@@ -66,12 +72,12 @@ class Corporation(BaseAgent):
 
         # Ensure salary is at least the minimum wage
         if self.salary + average_change < min_wage:
-            self._log(
-                f"Salary is below minimum wage, setting to {min_wage}", level="warning"
-            )
             self.salary = min_wage
         else:
             self.salary += average_change
+
+        if self.salary <= 0:
+            raise Exception(last_6_sales)
 
         self.stats.record(self.tick, salary=self.salary)
 
@@ -86,6 +92,10 @@ class Corporation(BaseAgent):
             self.pay_salary(employee)
 
     def pay_salary(self, employee: "Person") -> None:
+
+        if self.bank_interface.check_balance() < self.salary:
+            raise Exception(f"Failing to pay salary on tick {self.tick}")
+
         wtid, dtid = self.bank_interface.transfer(
             self.salary, to=employee.bank_interface
         )
@@ -95,48 +105,76 @@ class Corporation(BaseAgent):
         employee.latest_salary_id = dtid
         return wtid, dtid
 
-    def revenue_trend(self, months: int = 6) -> float:
-        revenue = list(self.stats.revenue.values())[-months:]
-        if len(revenue) < months:
+    def revenue_trend(self) -> float:
+        revenue = list(self.stats.revenue.values())[-4:]
+        if len(revenue) < 4:
             return 0.0  # not enough data
 
-        recent = revenue[-months:]
-        first_half = np.mean(recent[: months // 2])
-        second_half = np.mean(recent[months // 2 :])
+        recent = revenue[-4:]
+        first_half = np.mean(recent[: 4 // 2])
+        second_half = np.mean(recent[4 // 2 :])
 
         if first_half == 0:
             return 0.0
 
         return (second_half - first_half) / first_half
 
-    def apply_finance_decision(self, decision: str):
-        pass
-
     def review_finance(self):
+        result = self.recommend_finance_action()
+        if result["status"] == "borrow_funds":
+            loan = self.bank_interface.borrow_funds(result["amount"])
+            self.loans.append(loan)
+        elif result["status"] == "cost_savings":
+            self.cost_savings(result["amount"])
+
+    def recommend_finance_action(self, target_runway: float = 6) -> dict:
+
+        if self.tick < 4:
+            raise Exception("Not enough data to review finance")
+
         runway, burn, net_margin = self.forecast()
-        trend = self.revenue_trend(months=6)
+        trend = self.revenue_trend()
+        balance = self.bank_interface.check_balance()
+
+        monthly_burn = burn / 4 if burn > 0 else 0
+
+        result = {"status": "monitor", "amount": None}
+
         if net_margin > 0:
-            return "healthy"
-        elif burn > 0 and runway < 3:
-            if trend > 0:
-                return "borrow_funds"
-            else:
-                return "cost_savings"
-        elif burn > 0 and runway < 6:
-            return "monitor"
-        else:
-            return "monitor"
+            result["status"] = "healthy"
+            return result
+
+        if monthly_burn > 0:
+            if runway < 3:
+                if trend > 0:
+                    result["status"] = "borrow_funds"
+                    # Borrow enough to reach target runway
+                    result["amount"] = round((target_runway - runway) * monthly_burn, 2)
+                else:
+                    result["status"] = "cost_savings"
+                    # Calculate how much monthly burn to reduce
+                    new_burn = balance / target_runway
+                    result["amount"] = round(monthly_burn - (new_burn / 4), 2)
+            elif runway < target_runway:
+                result["status"] = "monitor"
+
+        return result
 
     def forecast(self):
+
+        if self.tick < 4:
+            raise Exception("Not enough data to forecast")
+
         balance = self.bank_interface.check_balance()
-        costs = list(self.stats.costs.values())[-3:]
-        revenue = list(self.stats.revenue.values())[-3:]
+        costs = list(self.stats.costs.values())[-4:]
+        revenue = list(self.stats.revenue.values())[-4:]
 
         # totals
         total_costs = sum(costs)
         total_revenue = sum(revenue)
 
         net_margin = total_revenue - total_costs
+
         burn = max(0, total_costs - total_revenue)
 
         if burn > 0:
@@ -148,6 +186,7 @@ class Corporation(BaseAgent):
 
     def cost_savings(self, save):
         num_to_fire = math.ceil(save / self.salary)
+        self._log(f"Firing {num_to_fire} employees to save {save}", level="warning")
         saved = 0
         for _ in range(num_to_fire):
             employee = self.employees.pop()
@@ -168,10 +207,10 @@ class Corporation(BaseAgent):
     def sell_good(self, bank_interface: "BankInterface") -> Good | None:
 
         if self.check_inventory():
-            bank_interface.transfer(self.latest_price, to=self.bank_interface)
+            bank_interface.transfer(self.current_price, to=self.bank_interface)
             good = self.goods.pop(0)
             self.latest_sales += 1
-            self.latest_revenue += self.latest_price
+            self.latest_revenue += self.current_price
             self.stats.record(self.tick, sales=self.latest_sales)
             self.stats.record(self.tick, revenue=self.latest_revenue)
             return good
@@ -179,20 +218,24 @@ class Corporation(BaseAgent):
             return False
 
     def adjust_price(self):
-        sales = sum(self.stats.sales.values())
-        demand = sum(self.stats.demand.values())
+        # Take all sales except last one
+        sales = list(self.stats.sales.values())[:-1]
+        demand = list(self.stats.demand.values())[:-1]
 
-        if demand == 0:
+        sum_sales = sum(sales)
+        sum_demand = sum(demand)
+
+        if sum_demand == 0:
             # Nobody wanted to buy → price too high
-            self.latest_price *= 0.9  # lower 10%
-        elif sales < demand:
+            self.current_price *= 0.9  # lower 10%
+        elif sum_sales < sum_demand:
             # More demand than sales → stock-out
-            self.latest_price *= 1.05  # raise 5%
+            self.current_price *= 1.05  # raise 5%
         else:
             # sales == demand → balanced
             pass
 
-        return self.latest_price
+        return self.current_price
 
     def reivew_hiring(self) -> None:
         employees = len(self.employees)
@@ -209,35 +252,51 @@ class Corporation(BaseAgent):
         # TODO: production should cost money!
         # but for now lets just use salary!
 
-        produce = self.latest_demand - len(self.goods)
+        fulfill = self.latest_demand - len(self.goods)
         capacity = self.ppe * len(self.employees)
 
-        produced = 0
-        for _ in range(produce):
-            if produced >= capacity or produced == produce:
-                break
-            self.goods.append(Good(price=self.latest_price))
-            produced += 1
+        actual_produce = math.ceil(min(fulfill, capacity))
 
-        self._log(f"Produced {produced} goods for {self.name}")
+        produced = 0
+        for _ in range(actual_produce):
+            self.goods.append(Good(price=self.current_price))
+            produced += 1
 
         # Reseet demand for next tick
         self.latest_demand = 0
         self.stats.record(self.tick, production=produced)
 
+    def one_tick(self, tick: int, min_wage: float):
+
+        self.set_tick(tick)
+        self.initialize_tick_stats()
+        self.produce_goods()
+        self.pay_salaries()
+        if self.tick > 1:
+            self.adjust_price()
+            self.review_salary(min_wage)
+        if self.tick > 4:
+            self.review_finance()
+
     def clean_up(self) -> None:
+        self.stats.record(self.tick, profit=self.latest_revenue - self.latest_costs)
         self.latest_sales = 0
+        self.latest_costs = 0
+        self.latest_revenue = 0
 
     def initialize_tick_stats(self):
         """Ensure all stats have entries for the current tick with default values"""
         defaults = {
-            "sales": 0,
-            "demand": 0,
+            "sales": None,
+            "demand": None,
             "production": 0,
-            "price": self.latest_price,
+            "price": self.current_price,
             "salary": self.salary,
             "hiring": self.hiring,
             "ppe": self.ppe,
+            "revenue": self.latest_revenue,
+            "costs": self.latest_costs,
+            "profit": self.latest_revenue - self.latest_costs,
         }
 
         for stat_name, default_value in defaults.items():

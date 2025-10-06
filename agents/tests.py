@@ -21,7 +21,7 @@ def test_person_spend():
     tid = person.bank_interface.deposit(100)
 
     corporation = Corporation()
-    corporation.latest_price = 10
+    corporation.current_price = 10
     corporation.bank_interface = BankInterface(bank_2, corporation)
     for _ in range(10):
         corporation.goods.append(Good(price=10))
@@ -83,7 +83,7 @@ def test_adjust_price(sales, demand, start_price, expected_factor):
     corp = Corporation()
     corp.stats.sales = sales
     corp.stats.demand = demand
-    corp.latest_price = start_price
+    corp.current_price = start_price
 
     new_price = corp.adjust_price()
     expected_price = start_price * expected_factor
@@ -93,7 +93,7 @@ def test_adjust_price(sales, demand, start_price, expected_factor):
 
 def test_produce_goods() -> None:
     corporation = Corporation()
-    corporation.latest_price = 10
+    corporation.current_price = 10
     corporation.bank_interface = BankInterface(Bank(CentralBank()), corporation)
     corporation.bank_interface.deposit(1010)
     corporation.latest_demand = 100
@@ -160,150 +160,137 @@ def test_pay_salary() -> None:
 
 
 @pytest.mark.parametrize(
-    "revenue, months, expected",
+    "revenues, expected",
     [
-        # Not enough data → 0.0
-        ({0: 100}, 3, 0.0),
         # Increasing
-        # last 3 months: [200, 300, 400]
-        # first_half = 200, second_half = 350 → (350-200)/200 = 0.75
-        ({0: 100, 1: 200, 2: 300, 3: 400}, 3, 0.75),
+        ([100, 150, 200, 250], 0.8),
         # Decreasing
-        # last 3 months: [300, 200, 100]
-        # first_half = 300, second_half = 150 → (150-300)/300 = -0.5
-        ({0: 400, 1: 300, 2: 200, 3: 100}, 3, -0.5),
-        # Flat → 0
-        ({0: 100, 1: 100, 2: 100, 3: 100}, 3, 0.0),
-        # Divide by zero in first_half → 0
-        ({0: 0, 1: 0, 2: 0, 3: 100}, 3, 0.0),
-        # Your example: [200, 150, 100] → (125-200)/200 = -0.375
-        ({0: 100, 1: 200, 2: 150, 3: 100}, 3, -0.375),
+        ([250, 200, 150, 100], -0.4444444444444444),
+        # Flat
+        ([100, 100, 100, 100], 0.0),
+        # Slight increase
+        ([100, 110, 120, 130], 0.19047619047619047),
+        # Slight decrease
+        ([130, 120, 110, 100], -0.16),
+        # Not enough data (<4) → 0.0
+        ([100, 200, 300], 0.0),
+        # First half mean is zero → 0.0 by function guard
+        ([0, 0, 10, 10], 0.0),
     ],
 )
-def test_revenue_trend(revenue, months, expected):
-    corp = Corporation()
-    corp.stats.revenue = revenue
-    result = corp.revenue_trend(months=months)
-    assert np.isclose(result, expected)
+def test_revenue_trend(revenues, expected) -> None:
+    corporation = Corporation()
+    corporation.set_tick(4)
+    corporation.bank_interface = BankInterface(Bank(CentralBank()), corporation)
+    corporation.bank_interface.deposit(100)
+
+    corporation.stats.revenue = {i: v for i, v in enumerate(revenues)}
+
+    result = corporation.revenue_trend()
+    assert result == pytest.approx(expected, rel=1e-9, abs=1e-9)
 
 
 @pytest.mark.parametrize(
-    "balance, costs, revenue, expected",
+    "deposit, costs, revenue, expected_runway, expected_burn, expected_net_margin",
     [
-        # Case 1: Profitable (revenue > costs)
-        # burn=0, net_margin=300-200=100, runway=inf
-        (1000, {0: 100, 1: 100}, {0: 100, 1: 200}, (float("inf"), 0, 100)),
-        # Case 2: Loss-making, positive runway
-        # costs=300, revenue=150 → burn=150, net_margin=-150
-        # runway=600/150=4
-        (600, {0: 100, 1: 200}, {0: 50, 1: 100}, (4.0, 150, -150)),
-        # Case 3: Break-even
-        # costs=200, revenue=200 → burn=0, net_margin=0 → runway=inf
-        (500, {0: 100, 1: 100}, {0: 150, 1: 50}, (float("inf"), 0, 0)),
-        # Case 4: High burn, short runway
-        # costs=500, revenue=200 → burn=300, net_margin=-300
-        # runway=900/300=3
-        (900, {0: 200, 1: 300}, {0: 100, 1: 100}, (3.0, 300, -300)),
+        # 1) Profitable → burn = 0, runway = inf
+        (1000, [100, 100, 100, 100], [200, 200, 200, 200], math.inf, 0, 400),
+        # 2) Breakeven → burn = 0, runway = inf
+        (1000, [200, 200, 200, 200], [200, 200, 200, 200], math.inf, 0, 0),
+        # 3) Loss → finite runway = balance / burn
+        (
+            1000,
+            [300, 300, 300, 300],
+            [200, 200, 200, 200],
+            pytest.approx(2.5, rel=1e-12),
+            400,
+            -400,
+        ),
+        # 4) Loss with non-round numbers
+        (
+            500,
+            [150, 200, 250, 300],
+            [100, 150, 200, 220],
+            pytest.approx(500 / 230, rel=1e-12),
+            230,
+            -230,
+        ),
+        # 5) Loss, zero balance → runway = 0
+        (0, [100, 100, 100, 100], [50, 50, 50, 50], 0.0, 200, -200),
+        # 6) Fewer than 4 months → uses whatever is present
+        (1000, [300, 100], [100, 200], pytest.approx(10.0, rel=1e-12), 100, -100),
     ],
 )
-def test_forecast(balance, costs, revenue, expected):
-    corp = Corporation()
-    corp.bank_interface = BankInterface(Bank(CentralBank()), corp)
-    corp.bank_interface.deposit(balance)
-    corp.stats.costs = costs
-    corp.stats.revenue = revenue
+def test_forecast(
+    deposit, costs, revenue, expected_runway, expected_burn, expected_net_margin
+):
+    corporation = Corporation()
+    corporation.set_tick(4)
+    corporation.bank_interface = BankInterface(Bank(CentralBank()), corporation)
+    corporation.bank_interface.deposit(deposit)
 
-    runway, burn, net_margin = corp.forecast()
+    corporation.stats.costs = {i: v for i, v in enumerate(costs)}
+    corporation.stats.revenue = {i: v for i, v in enumerate(revenue)}
 
-    exp_runway, exp_burn, exp_margin = expected
+    runway, burn, net_margin = corporation.forecast()
 
-    if exp_runway == float("inf"):
-        assert runway == float("inf")
-    else:
-        assert np.isclose(runway, exp_runway)
+    assert runway == expected_runway
+    assert burn == expected_burn
+    assert net_margin == expected_net_margin
 
-    assert burn == exp_burn
-    assert net_margin == exp_margin
+
+import pytest
 
 
 @pytest.mark.parametrize(
-    "balance, costs, revenue, expected",
+    "deposit, costs, revenue, expected_status, expected_amount",
     [
-        # Case 1: Profitable (revenue > costs)
-        # burn=0, net_margin=300-200=100, runway=inf
-        (1000, {0: 100, 1: 100}, {0: 100, 1: 200}, (float("inf"), 0, 100)),
-        # Case 2: Loss-making, positive runway
-        # costs=300, revenue=150 → burn=150, net_margin=-150
-        # runway=600/150=4
-        (600, {0: 100, 1: 200}, {0: 50, 1: 100}, (4.0, 150, -150)),
-        # Case 3: Break-even
-        # costs=200, revenue=200 → burn=0, net_margin=0 → runway=inf
-        (500, {0: 100, 1: 100}, {0: 150, 1: 50}, (float("inf"), 0, 0)),
-        # Case 4: High burn, short runway
-        # costs=500, revenue=200 → burn=300, net_margin=-300
-        # runway=900/300=3
-        (900, {0: 200, 1: 300}, {0: 100, 1: 100}, (3.0, 300, -300)),
-    ],
-)
-def test_forecast(balance, costs, revenue, expected):
-    corp = Corporation()
-    corp.bank_interface = BankInterface(Bank(CentralBank()), corp)
-    corp.bank_interface.deposit(balance)
-    corp.stats.costs = costs
-    corp.stats.revenue = revenue
-
-    runway, burn, net_margin = corp.forecast()
-
-    exp_runway, exp_burn, exp_margin = expected
-
-    if exp_runway == float("inf"):
-        assert runway == float("inf")
-    else:
-        assert np.isclose(runway, exp_runway)
-
-    assert burn == exp_burn
-    assert net_margin == exp_margin
-
-
-@pytest.mark.parametrize(
-    "balance, costs, revenue, expected",
-    [
-        # Case 1: Profitable → Healthy
-        # costs=200, revenue=400 → net_margin=+200
-        (1000, {0: 100, 1: 100}, {0: 200, 1: 200}, "healthy"),
-        # Case 2: Loss, runway < 3, trend > 0 → take_loan
-        # costs=1000, revenue=900 → burn=100, runway=200/100=2 (<3)
+        # 1) Profitable → "healthy"
+        (1000, [100, 100, 100, 100], [200, 200, 200, 200], "healthy", None),
+        # 2) Losing money, short runway (<3), positive trend → "borrow_funds"
+        # burn = (1200 - 700) = 500 over 4m → monthly_burn = 125
+        # runway = 200 / 500 = 0.4
+        # amount = (6 - 0.4) * 125 = 700.00
         (
             200,
-            {0: 400, 1: 600},  # costs = 1000
-            {0: 100, 1: 150, 2: 200, 3: 250, 4: 300, 5: 350},  # increasing 6 months
+            [300, 300, 300, 300],
+            [100, 150, 200, 250],
             "borrow_funds",
+            pytest.approx(700.00, rel=1e-12, abs=1e-12),
         ),
-        # Case 3: Loss, runway < 3, trend <= 0 → cost_savings
-        # costs=1000, revenue=900 → burn=100, runway=200/100=2 (<3)
+        # 3) Losing money, short runway (<3), non-positive trend → "cost_savings"
+        # same burn as above → monthly_burn = 125, runway = 0.4
+        # new_burn = balance / target_runway = 200 / 6 = 33.333...
+        # amount = monthly_burn - (new_burn / 4) = 125 - 8.333... = 116.67
         (
             200,
-            {0: 400, 1: 600},
-            {0: 400, 1: 300, 2: 200, 3: 100},  # decreasing → trend <0
+            [300, 300, 300, 300],
+            [250, 200, 150, 100],
             "cost_savings",
+            pytest.approx(116.67, rel=1e-12, abs=1e-12),
         ),
-        # Case 4: Loss, runway between 3 and 6 → monitor
-        # costs=600, revenue=300 → burn=300, runway=1200/300=4
-        (1200, {0: 200, 1: 200, 2: 200}, {0: 100, 1: 100, 2: 100}, "monitor"),
-        # Case 5: Loss, runway ≥6 → monitor
-        # costs=600, revenue=300 → burn=300, runway=3000/300=10
-        (3000, {0: 200, 1: 200, 2: 200}, {0: 100, 1: 100, 2: 100}, "monitor"),
+        # 4) Losing money, runway between 3 and 6 → "monitor"
+        # burn = 1200 - 1000 = 200; runway = 700 / 200 = 3.5
+        (700, [300, 300, 300, 300], [250, 250, 250, 250], "monitor", None),
+        # 5) Breakeven (burn = 0) → "monitor"
+        (1000, [200, 200, 200, 200], [200, 200, 200, 200], "monitor", None),
+        # 6) Losing money but long runway (>= target_runway) → "monitor"
+        # burn = 200; runway = 2000 / 200 = 10
+        (2000, [300, 300, 300, 300], [250, 250, 250, 250], "monitor", None),
     ],
 )
-def test_review_finance(balance, costs, revenue, expected):
+def test_recommend_finance_action(
+    deposit, costs, revenue, expected_status, expected_amount
+):
     corp = Corporation()
+    corp.set_tick(4)
     corp.bank_interface = BankInterface(Bank(CentralBank()), corp)
+    corp.bank_interface.deposit(deposit)
 
-    # Set bank balance
-    corp.bank_interface.deposit(balance)
+    corp.stats.costs = {i: v for i, v in enumerate(costs)}
+    corp.stats.revenue = {i: v for i, v in enumerate(revenue)}
 
-    # Set stats
-    corp.stats.costs = costs
-    corp.stats.revenue = revenue
+    result = corp.recommend_finance_action()  # target_runway defaults to 6
 
-    assert corp.review_finance() == expected
+    assert result["status"] == expected_status
+    assert result["amount"] == expected_amount
