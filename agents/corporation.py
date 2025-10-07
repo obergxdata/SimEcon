@@ -12,18 +12,39 @@ if TYPE_CHECKING:
     from banking.bank_accounting import Loan
 
 
-@dataclass
 class CorpStats(BaseStats):
-    sales: dict[int, float] = field(default_factory=dict)
-    revenue: dict[int, float] = field(default_factory=dict)
-    profit: dict[int, float] = field(default_factory=dict)
-    costs: dict[int, float] = field(default_factory=dict)
-    demand: dict[int, float] = field(default_factory=dict)
-    production: dict[int, float] = field(default_factory=dict)
-    price: dict[int, float] = field(default_factory=dict)
-    salary: dict[int, float] = field(default_factory=dict)
-    hiring: dict[int, bool] = field(default_factory=dict)
-    ppe: dict[int, int] = field(default_factory=dict)
+    def __init__(self):
+        super().__init__()  # Initializes self.tick = 0
+        self.sales: dict[int, float] = {}
+        self.revenue: dict[int, float] = {}
+        self.profit: dict[int, float] = {}
+        self.costs: dict[int, float] = {}
+        self.demand: dict[int, float] = {}
+        self.production: dict[int, float] = {}
+        self.price: dict[int, float] = {}
+        self.salary: dict[int, float] = {}
+        self.hiring: dict[int, bool] = {}
+        self.ppe: dict[int, int] = {}
+
+    def trend(self, stat_name: str, lookback: int = 4) -> float:
+
+        if self.tick < lookback:
+            raise Exception(f"Not enough data to calculate {stat_name} trend")
+
+        # Get the stat dictionary
+        stat_dict = getattr(self, stat_name)
+
+        # Get the last 'lookback' values, excluding the current tick
+        values = list(stat_dict.values())[:-1][-lookback:]
+
+        # Calculate means of first and second halves
+        first_half = np.mean(values[: lookback // 2])
+        second_half = np.mean(values[lookback // 2 :])
+
+        if first_half == 0:
+            return 0.0
+
+        return (second_half - first_half) / first_half
 
 
 @dataclass
@@ -50,37 +71,6 @@ class Corporation(BaseAgent):
         self.alive = True
         self.loans: list[Loan] = []
 
-    def review_salary(self, min_wage: float = 0) -> None:
-        # Increase salary by the average sales increase/decrease
-        # for the last 6 sales values
-
-        # Take all sales except last one
-        sales = list(self.stats.sales.values())[:-1]
-        last_6_sales = sales[-6:]
-
-        if len(last_6_sales) < 2:
-            return  # Need at least 2 data points to calculate change
-
-        # Calculate the differences between consecutive periods
-        changes = []
-        for i in range(1, len(last_6_sales)):
-            change = last_6_sales[i] - last_6_sales[i - 1]
-            changes.append(change)
-
-        # Average change across the periods
-        average_change = sum(changes) / len(changes)
-
-        # Ensure salary is at least the minimum wage
-        if self.salary + average_change < min_wage:
-            self.salary = min_wage
-        else:
-            self.salary += average_change
-
-        if self.salary <= 0:
-            raise Exception(last_6_sales)
-
-        self.stats.record(self.tick, salary=self.salary)
-
     def add_employee(self, employee: "Person") -> None:
         employee.employed = True
         employee.salary = self.salary
@@ -105,60 +95,84 @@ class Corporation(BaseAgent):
         employee.latest_salary_id = dtid
         return wtid, dtid
 
+    def change_salary(self, pct: float) -> float:
+        old_salary = self.salary
+        self.salary = self.salary * (1 + pct)
+        self.stats.record(self.tick, salary=self.salary)
+        return len(self.employees) * (old_salary - self.salary)
+
     def revenue_trend(self) -> float:
-        revenue = list(self.stats.revenue.values())[-4:]
-        if len(revenue) < 4:
-            return 0.0  # not enough data
+        return self.stats.trend("revenue")
 
-        recent = revenue[-4:]
-        first_half = np.mean(recent[: 4 // 2])
-        second_half = np.mean(recent[4 // 2 :])
+    def sales_trend(self) -> float:
+        return self.stats.trend("sales")
 
-        if first_half == 0:
-            return 0.0
+    def finance_action(self, allow_borrow: bool = True) -> tuple[str, float]:
+        recommendation = self.finance_recommendation(allow_borrow)
+        action, amount = recommendation
+        if action == "borrow_funds" and allow_borrow:
+            loan = self.bank_interface.borrow_funds(amount)
+            if loan:
+                self.loans.append(loan)
+            else:
+                self.finance_action(allow_borrow=False)
+        elif action == "fire_employees":
+            self.remove_employees(amount)
+        elif action == "lower_salary":
+            self.change_salary(-0.05)
+        elif action == "lower_price":
+            self.current_price *= 0.95
+        elif action == "ok":
+            pass
 
-        return (second_half - first_half) / first_half
+        return action, amount
 
-    def review_finance(self):
-        result = self.recommend_finance_action()
-        if result["status"] == "borrow_funds":
-            loan = self.bank_interface.borrow_funds(result["amount"])
-            self.loans.append(loan)
-        elif result["status"] == "cost_savings":
-            self.cost_savings(result["amount"])
-
-    def recommend_finance_action(self, target_runway: float = 6) -> dict:
-
+    def finance_recommendation(self, allow_borrow: bool = True) -> tuple[str, float]:
+        # We need atleast 4 months of data to review finance
         if self.tick < 4:
-            raise Exception("Not enough data to review finance")
-
+            raise Exception(f"Not enough data to review finance on tick {self.tick}")
+        # Burn = costs - revenue (how money we are losing or making)
+        # Runway = balance / burn (how many months we can survive)
+        # Trend = if revenue is increasing or decreasing
         runway, burn, net_margin = self.forecast()
-        trend = self.revenue_trend()
-        balance = self.bank_interface.check_balance()
-
+        revenue_trend = self.revenue_trend()
+        sales_trend = self.sales_trend()
+        # We want to atleast have 6 months of runway
+        target_runway = 6
         monthly_burn = burn / 4 if burn > 0 else 0
 
-        result = {"status": "monitor", "amount": None}
-
-        if net_margin > 0:
-            result["status"] = "healthy"
-            return result
-
-        if monthly_burn > 0:
-            if runway < 3:
-                if trend > 0:
-                    result["status"] = "borrow_funds"
-                    # Borrow enough to reach target runway
-                    result["amount"] = round((target_runway - runway) * monthly_burn, 2)
+        # We are losing money
+        if burn > 0:
+            missing = (target_runway - runway) * monthly_burn
+            # Is the trend positive?
+            if revenue_trend >= 0 and allow_borrow:
+                # We are losing money but the trend is positive
+                # We should borrow money
+                return "borrow_funds", missing
+            else:
+                # We are losing money and the trend is negative
+                # We should reduce costs
+                # is runway less than 3?
+                if runway < 3:
+                    # We should fire employees
+                    return "fire_employees", missing
                 else:
-                    result["status"] = "cost_savings"
-                    # Calculate how much monthly burn to reduce
-                    new_burn = balance / target_runway
-                    result["amount"] = round(monthly_burn - (new_burn / 4), 2)
-            elif runway < target_runway:
-                result["status"] = "monitor"
-
-        return result
+                    # We should lower salary
+                    return "lower_salary", 0
+        else:
+            # We are making money
+            if revenue_trend >= 0:
+                # We are making money and the trend is positive
+                if sales_trend >= 0:
+                    # We should keep doing what we are doing
+                    return "ok", 0
+                else:
+                    # We should lower price
+                    return "lower_price", 0
+            else:
+                # We are making money and the trend is negative
+                # We should reduce costs
+                return "lower_salary", 0
 
     def forecast(self):
 
@@ -166,8 +180,8 @@ class Corporation(BaseAgent):
             raise Exception("Not enough data to forecast")
 
         balance = self.bank_interface.check_balance()
-        costs = list(self.stats.costs.values())[-4:]
-        revenue = list(self.stats.revenue.values())[-4:]
+        costs = list(self.stats.costs.values())[:-1][-4:]
+        revenue = list(self.stats.revenue.values())[:-1][-4:]
 
         # totals
         total_costs = sum(costs)
@@ -184,7 +198,7 @@ class Corporation(BaseAgent):
 
         return runway, burn, net_margin
 
-    def cost_savings(self, save):
+    def remove_employees(self, save):
         num_to_fire = math.ceil(save / self.salary)
         self._log(f"Firing {num_to_fire} employees to save {save}", level="warning")
         saved = 0
@@ -219,8 +233,8 @@ class Corporation(BaseAgent):
 
     def adjust_price(self):
         # Take all sales except last one
-        sales = list(self.stats.sales.values())[:-1]
-        demand = list(self.stats.demand.values())[:-1]
+        sales = list(self.stats.sales.values())[:-1][-4:]
+        demand = list(self.stats.demand.values())[:-1][-4:]
 
         sum_sales = sum(sales)
         sum_demand = sum(demand)
@@ -272,11 +286,9 @@ class Corporation(BaseAgent):
         self.initialize_tick_stats()
         self.produce_goods()
         self.pay_salaries()
-        if self.tick > 1:
-            self.adjust_price()
-            self.review_salary(min_wage)
         if self.tick > 4:
-            self.review_finance()
+            self.adjust_price()
+            self.finance_action()
 
     def clean_up(self) -> None:
         self.stats.record(self.tick, profit=self.latest_revenue - self.latest_costs)
@@ -285,18 +297,20 @@ class Corporation(BaseAgent):
         self.latest_revenue = 0
 
     def initialize_tick_stats(self):
-        """Ensure all stats have entries for the current tick with default values"""
+
+        self.stats.set_tick(self.tick)
+
         defaults = {
-            "sales": None,
-            "demand": None,
+            "sales": 0,
+            "demand": 0,
             "production": 0,
             "price": self.current_price,
             "salary": self.salary,
             "hiring": self.hiring,
             "ppe": self.ppe,
-            "revenue": self.latest_revenue,
+            "revenue": 0,
             "costs": self.latest_costs,
-            "profit": self.latest_revenue - self.latest_costs,
+            "profit": 0,
         }
 
         for stat_name, default_value in defaults.items():

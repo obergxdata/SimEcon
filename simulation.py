@@ -20,12 +20,16 @@ class SimStats(BaseStats):
     goods_sold: dict[int, int] = field(default_factory=dict)
     goods_demanded: dict[int, int] = field(default_factory=dict)
     goods_owned: dict[int, int] = field(default_factory=dict)
+    goods_avg_price: dict[int, float] = field(default_factory=dict)
+    goods_min_price: dict[int, float] = field(default_factory=dict)
+    goods_max_price: dict[int, float] = field(default_factory=dict)
     goods_stock_left: dict[int, int] = field(default_factory=dict)
-    person_money_spent: dict[int, int] = field(default_factory=dict)
+    person_total_budget: dict[int, int] = field(default_factory=dict)
+    person_avg_spending: dict[int, int] = field(default_factory=dict)
     person_avg_money_in_banks: dict[int, int] = field(default_factory=dict)
+    person_total_queue_size: dict[int, int] = field(default_factory=dict)
     company_money_in_banks: dict[int, int] = field(default_factory=dict)
     person_avg_salary: dict[int, float] = field(default_factory=dict)
-    goods_avg_price: dict[int, float] = field(default_factory=dict)
     company_revenue: dict[int, float] = field(default_factory=dict)
     company_avg_revenue: dict[int, float] = field(default_factory=dict)
     company_avg_costs: dict[int, float] = field(default_factory=dict)
@@ -47,7 +51,8 @@ class Simulation:
     def corporations_tick(self):
         # Check for salary review
         for corp in self.corporations:
-            corp.one_tick(self.tick, self.sim_settings.min_wage)
+            if corp.alive:
+                corp.one_tick(self.tick, self.sim_settings.min_wage)
 
     def people_tick(self):
         # We always need to reset demand and sales
@@ -58,9 +63,7 @@ class Simulation:
         for person in self.people:
             person.set_tick(self.tick)
             if person.bank_interface.check_balance() > 0:
-                spent = person.spend(self.corporations)
-                if spent > 0:
-                    self.stats.record(self.tick, person_money_spent=spent)
+                person.spend(self.corporations)
             else:
                 broke += 1
 
@@ -85,35 +88,44 @@ class Simulation:
 
     def gen_stats(self):
 
+        alive_corporations = [c for c in self.corporations if c.alive]
         # Population stats
         persons_employed = len([1 for p in self.people if p.employed])
         goods_owned = sum([len(p.bought_goods) for p in self.people])
-        goods_demanded = sum([c.stats.demand[self.tick] for c in self.corporations])
-        goods_produced = sum([c.stats.production[self.tick] for c in self.corporations])
-        goods_sold = sum([c.stats.sales[self.tick] for c in self.corporations])
-        goods_stock_left = sum([len(c.goods) for c in self.corporations])
+        goods_demanded = sum([c.stats.demand[self.tick] for c in alive_corporations])
+        goods_produced = sum(
+            [c.stats.production[self.tick] for c in alive_corporations]
+        )
+        goods_sold = sum([c.stats.sales[self.tick] for c in alive_corporations])
+        goods_stock_left = sum([len(c.goods) for c in alive_corporations])
         goods_avg_price = sum(
-            [c.stats.price[self.tick] for c in self.corporations]
-        ) / len(self.corporations)
-        person_money_spent = sum([g.price for p in self.people for g in p.bought_goods])
+            [c.stats.price[self.tick] for c in alive_corporations]
+        ) / len(alive_corporations)
+        goods_min_price = min([c.stats.price[self.tick] for c in alive_corporations])
+        goods_max_price = max([c.stats.price[self.tick] for c in alive_corporations])
+        person_total_budget = sum([p.latest_budget for p in self.people])
+        person_avg_spending = sum([p.latest_spending for p in self.people]) / len(
+            self.people
+        )
         person_avg_money_in_banks = sum(
             [p.bank_interface.check_balance() for p in self.people]
         ) / len(self.people)
+        person_total_queue_size = sum([p.latest_queue_size for p in self.people])
         company_money_in_banks = sum(
-            [c.bank_interface.check_balance() for c in self.corporations]
+            [c.bank_interface.check_balance() for c in alive_corporations]
         )
-        company_revenue = sum([c.stats.revenue[self.tick] for c in self.corporations])
+        company_revenue = sum([c.stats.revenue[self.tick] for c in alive_corporations])
         company_avg_revenue = sum(
-            [c.stats.revenue[self.tick] for c in self.corporations]
-        ) / len(self.corporations)
+            [c.stats.revenue[self.tick] for c in alive_corporations]
+        ) / len(alive_corporations)
         company_avg_costs = sum(
-            [c.stats.costs[self.tick] for c in self.corporations]
-        ) / len(self.corporations)
+            [c.stats.costs[self.tick] for c in alive_corporations]
+        ) / len(alive_corporations)
         company_avg_profit = sum(
-            [c.stats.profit[self.tick] for c in self.corporations]
-        ) / len(self.corporations)
-        person_avg_salary = sum([c.salary for c in self.corporations]) / len(
-            self.corporations
+            [c.stats.profit[self.tick] for c in alive_corporations]
+        ) / len(alive_corporations)
+        person_avg_salary = sum([c.salary for c in alive_corporations]) / len(
+            alive_corporations
         )
 
         self.stats.record(
@@ -125,8 +137,12 @@ class Simulation:
             goods_sold=goods_sold,
             goods_stock_left=goods_stock_left,
             goods_avg_price=round(goods_avg_price, 2),
-            person_money_spent=round(person_money_spent, 2),
+            goods_min_price=round(goods_min_price, 2),
+            goods_max_price=round(goods_max_price, 2),
+            person_total_budget=round(person_total_budget, 2),
+            person_avg_spending=round(person_avg_spending, 2),
             person_avg_money_in_banks=round(person_avg_money_in_banks, 2),
+            person_total_queue_size=round(person_total_queue_size, 2),
             company_money_in_banks=round(company_money_in_banks, 2),
             company_revenue=round(company_revenue, 2),
             company_avg_revenue=round(company_avg_revenue, 2),

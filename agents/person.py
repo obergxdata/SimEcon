@@ -14,8 +14,10 @@ class Person(BaseAgent):
         self.bought_goods: list[Good] = []
         self.mpc: float = 0.5
         self.latest_spending: int = 0
+        self.latest_budget: int = 0
         self.employed: bool = False
         self.latest_salary_id: str = ""
+        self.latest_queue_size: int = 0
 
     def choose_corporations(self, corps: list[Corporation]):
         # return one corporation at random
@@ -43,6 +45,7 @@ class Person(BaseAgent):
 
     def buy_goods(self, corps: list[Corporation], budget: int) -> int:
         queue = self.purchase_queue(corps, budget)
+        self.latest_queue_size = len(queue)
         bought = 0
         for corp in queue:
             good = corp.sell_good(self.bank_interface)
@@ -69,6 +72,7 @@ class Person(BaseAgent):
 
         # How much should the customer spend?
         budget = budget_ref * self.mpc
+        self.latest_budget = budget
         return self.buy_goods(corps=corps, budget=int(budget))
 
     def pay_loans(self) -> None:
@@ -79,4 +83,4 @@ class Person(BaseAgent):
 
     def clean_up(self) -> None:
         # Calculations
-        self.latest_spending = 0
+        pass

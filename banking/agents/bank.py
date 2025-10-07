@@ -135,7 +135,7 @@ class Bank:
 
         # --- Risk assessment ---
         # If company is losing money and has <3 months runway → too risky
-        if runway < 3 and net_margin < 0:
+        if runway < 2 and net_margin < 0:
             return 0  # deny loan
 
         # If negative trend and losing money → high risk
