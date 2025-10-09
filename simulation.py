@@ -8,7 +8,7 @@ import random
 from logging_config import get_logger
 from settings import CorporationSeed, PersonSeed, SimulationSettings
 from dataclasses import dataclass, field
-import math
+import time
 
 logger = get_logger(__name__)
 
@@ -23,7 +23,7 @@ class SimStats(BaseStats):
     goods_avg_price: dict[int, float] = field(default_factory=dict)
     goods_min_price: dict[int, float] = field(default_factory=dict)
     goods_max_price: dict[int, float] = field(default_factory=dict)
-    goods_stock_left: dict[int, int] = field(default_factory=dict)
+    goods_overstock: dict[int, int] = field(default_factory=dict)
     person_total_budget: dict[int, int] = field(default_factory=dict)
     person_avg_spending: dict[int, int] = field(default_factory=dict)
     person_avg_money_in_banks: dict[int, int] = field(default_factory=dict)
@@ -34,6 +34,7 @@ class SimStats(BaseStats):
     company_avg_revenue: dict[int, float] = field(default_factory=dict)
     company_avg_costs: dict[int, float] = field(default_factory=dict)
     company_avg_profit: dict[int, float] = field(default_factory=dict)
+    company_total_loans: dict[int, int] = field(default_factory=dict)
 
 
 class Simulation:
@@ -52,24 +53,36 @@ class Simulation:
         # Check for salary review
         for corp in self.corporations:
             if corp.alive:
-                corp.one_tick(self.tick, self.sim_settings.min_wage)
+                corp.one_tick(self.tick)
+
+    def goverment_tick(self):
+        # Get unemployed people
+        unemployed_people = [p for p in self.people if not p.employed]
+        # Give them money
+        for person in unemployed_people:
+            ltid = person.latest_salary_id
+            if ltid:
+                amount = person.bank_interface.find_transaction(ltid).amount
+            else:
+                amount = self.sim_settings.benefit
+
+            tid = person.bank_interface.deposit(amount * 0.6)
+            person.latest_salary_id = tid
 
     def people_tick(self):
         # We always need to reset demand and sales
         if not self.corporations or not self.people:
             raise Exception("corporations and people must be initialized")
 
-        broke = 0
         for person in self.people:
             person.set_tick(self.tick)
             if person.bank_interface.check_balance() > 0:
                 person.spend(self.corporations)
-            else:
-                broke += 1
 
     def one_tick(self):
         self.tick += 1
         self.stats.set_tick(self.tick)
+        # self.goverment_tick()
         self.corporations_tick()
         self.people_tick()
         self.clean_up()
@@ -97,7 +110,9 @@ class Simulation:
             [c.stats.production[self.tick] for c in alive_corporations]
         )
         goods_sold = sum([c.stats.sales[self.tick] for c in alive_corporations])
-        goods_stock_left = sum([len(c.goods) for c in alive_corporations])
+        goods_overstock = sum(
+            [c.stats.overstock[self.tick] for c in alive_corporations]
+        )
         goods_avg_price = sum(
             [c.stats.price[self.tick] for c in alive_corporations]
         ) / len(alive_corporations)
@@ -124,6 +139,9 @@ class Simulation:
         company_avg_profit = sum(
             [c.stats.profit[self.tick] for c in alive_corporations]
         ) / len(alive_corporations)
+        company_total_loans = sum(
+            [sum([l.amount for l in c.loans]) for c in alive_corporations]
+        )
         person_avg_salary = sum([c.salary for c in alive_corporations]) / len(
             alive_corporations
         )
@@ -135,7 +153,7 @@ class Simulation:
             goods_demanded=goods_demanded,
             goods_produced=goods_produced,
             goods_sold=goods_sold,
-            goods_stock_left=goods_stock_left,
+            goods_overstock=goods_overstock,
             goods_avg_price=round(goods_avg_price, 2),
             goods_min_price=round(goods_min_price, 2),
             goods_max_price=round(goods_max_price, 2),
@@ -148,6 +166,7 @@ class Simulation:
             company_avg_revenue=round(company_avg_revenue, 2),
             company_avg_profit=round(company_avg_profit, 2),
             company_avg_costs=round(company_avg_costs, 2),
+            company_total_loans=company_total_loans,
             person_avg_salary=round(person_avg_salary, 2),
         )
 
@@ -214,6 +233,39 @@ class Simulation:
             person = Person(bank=bank)
             person.mpc = self.person_seed.mpc
             self.people.append(person)
+
+    def validate_settings(self):
+        # Calculate employees needed for demand
+        emp_needed_per_corp = self.corporation_seed.demand // self.corporation_seed.ppe
+        emp_needed_total = (
+            emp_needed_per_corp * self.sim_settings.number_of_corporations
+        )
+        total_salary = self.corporation_seed.salary * emp_needed_total
+        total_possible_revenue = total_salary * self.person_seed.mpc
+
+        if emp_needed_total > self.sim_settings.number_of_people:
+            logger.warning(
+                "Not enough people to meet demand. "
+                f"Needed {emp_needed_total}, have {self.sim_settings.number_of_people}"
+            )
+
+        unit_cost = round(self.corporation_seed.salary / self.corporation_seed.ppe, 2)
+        if unit_cost > self.corporation_seed.price:
+            logger.warning(
+                "Unit cost exceeds price. "
+                f"Cost: {unit_cost}, Price: {self.corporation_seed.price}"
+            )
+
+        missing = total_salary - total_possible_revenue
+        missing_percentage = missing / total_salary
+        if missing > 0:
+            logger.warning(
+                "Revenue insufficient to cover salaries. "
+                f"Revenue: {total_possible_revenue}, Salaries: {total_salary}. "
+                f"Need {missing_percentage:.1%} cost reduction"
+            )
+
+        time.sleep(3)
 
 
 if __name__ == "__main__":

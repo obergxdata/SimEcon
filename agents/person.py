@@ -16,7 +16,7 @@ class Person(BaseAgent):
         self.latest_spending: int = 0
         self.latest_budget: int = 0
         self.employed: bool = False
-        self.latest_salary_id: str = ""
+        self.latest_salary_id: str = None
         self.latest_queue_size: int = 0
 
     def choose_corporations(self, corps: list[Corporation]):

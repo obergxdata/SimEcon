@@ -132,6 +132,7 @@ class Bank:
         balance = self.get_ledger(bank_interface)
         runway, burn, net_margin = corp.forecast()
         trend = corp.revenue_trend()
+        current_loans = sum([l.amount for l in self.loans[bank_interface]])
 
         # --- Risk assessment ---
         # If company is losing money and has <3 months runway → too risky
@@ -157,7 +158,9 @@ class Bank:
         # Ensure it doesn’t exceed total deposits or cash safety ratio
         max_amount = min(base_amount, 0.75 * balance)
 
-        return min(max_amount, amount)
+        available_amount = max_amount - current_loans
+
+        return min(available_amount, amount)
 
     def find_transaction(
         self, tid: str, bank_interface: "BankInterface"

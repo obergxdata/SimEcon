@@ -25,6 +25,7 @@ class CorpStats(BaseStats):
         self.salary: dict[int, float] = {}
         self.hiring: dict[int, bool] = {}
         self.ppe: dict[int, int] = {}
+        self.overstock: dict[int, int] = {}
 
     def trend(self, stat_name: str, lookback: int = 4) -> float:
 
@@ -107,9 +108,16 @@ class Corporation(BaseAgent):
     def sales_trend(self) -> float:
         return self.stats.trend("sales")
 
+    def overstock_trend(self) -> float:
+        return self.stats.trend("overstock")
+
+    def pay_interest(self) -> None:
+        pass
+
     def finance_action(self, allow_borrow: bool = True) -> tuple[str, float]:
         recommendation = self.finance_recommendation(allow_borrow)
         action, amount = recommendation
+        self._log(f"action: {action}, amount: {amount}", level="warning")
         if action == "borrow_funds" and allow_borrow:
             loan = self.bank_interface.borrow_funds(amount)
             if loan:
@@ -120,8 +128,12 @@ class Corporation(BaseAgent):
             self.remove_employees(amount)
         elif action == "lower_salary":
             self.change_salary(-0.05)
-        elif action == "lower_price":
+        elif action == "decrease_price":
+            self.hiring = False
             self.current_price *= 0.95
+        elif action == "increase_price":
+            self.hiring = True
+            self.current_price *= 1.05
         elif action == "ok":
             pass
 
@@ -137,13 +149,17 @@ class Corporation(BaseAgent):
         runway, burn, net_margin = self.forecast()
         revenue_trend = self.revenue_trend()
         sales_trend = self.sales_trend()
+        overstock_trend = self.overstock_trend()
         # We want to atleast have 6 months of runway
         target_runway = 6
         monthly_burn = burn / 4 if burn > 0 else 0
-
+        missing = (target_runway - runway) * monthly_burn
         # We are losing money
-        if burn > 0:
-            missing = (target_runway - runway) * monthly_burn
+        self._log(
+            f"Runway: {runway}, Burn: {burn}, Net margin: {net_margin}, monthly burn: {monthly_burn}",
+            level="warning",
+        )
+        if missing > 0:
             # Is the trend positive?
             if revenue_trend >= 0 and allow_borrow:
                 # We are losing money but the trend is positive
@@ -159,20 +175,13 @@ class Corporation(BaseAgent):
                 else:
                     # We should lower salary
                     return "lower_salary", 0
+
         else:
             # We are making money
             if revenue_trend >= 0:
-                # We are making money and the trend is positive
-                if sales_trend >= 0:
-                    # We should keep doing what we are doing
-                    return "ok", 0
-                else:
-                    # We should lower price
-                    return "lower_price", 0
+                return "increase_price", 0
             else:
-                # We are making money and the trend is negative
-                # We should reduce costs
-                return "lower_salary", 0
+                return "decrease_price", 0
 
     def forecast(self):
 
@@ -280,14 +289,13 @@ class Corporation(BaseAgent):
         self.latest_demand = 0
         self.stats.record(self.tick, production=produced)
 
-    def one_tick(self, tick: int, min_wage: float):
+    def one_tick(self, tick: int):
 
         self.set_tick(tick)
         self.initialize_tick_stats()
         self.produce_goods()
         self.pay_salaries()
         if self.tick > 4:
-            self.adjust_price()
             self.finance_action()
 
     def clean_up(self) -> None:
@@ -311,8 +319,9 @@ class Corporation(BaseAgent):
             "revenue": 0,
             "costs": self.latest_costs,
             "profit": 0,
+            "overstock": len(self.goods),
         }
 
         for stat_name, default_value in defaults.items():
             if self.tick not in getattr(self.stats, stat_name):
-                getattr(self.stats, stat_name)[self.tick] = default_value
+                getattr(self.stats, stat_name)[self.tick] = default_value  #

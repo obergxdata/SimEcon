@@ -23,4 +23,4 @@ class SimulationSettings:
     number_of_corporations: int = 0
     number_of_people: int = 0
     number_of_banks: int = 0
-    min_wage: float = 0
+    benefit: float = 0
